@@ -21,7 +21,7 @@ export default function StudentAuth() {
     }
     const userId = data.user?.id;
     if (userId) {
-      await supabase.from('profiles').upsert({ id: userId, full_name: fullName, role: 'student' });
+      await supabase.from('profiles').upsert({ id: userId, fullName: fullName, role: 'student' });
     }
     setMessage('Signup successful! You can now sign in.');
     setLoading(false);
