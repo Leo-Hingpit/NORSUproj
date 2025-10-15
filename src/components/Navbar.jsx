@@ -1,4 +1,4 @@
-import React from 'react';
+import React from 'react'; //new code
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 
