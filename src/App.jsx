@@ -1,3 +1,4 @@
+// src/App.jsx
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { supabase } from './supabaseClient';
@@ -14,14 +15,25 @@ export default function App() {
   const [profile, setProfile] = useState(null);
 
   useEffect(() => {
-    const loadSession = async () => {
+    const initAuth = async () => {
+      console.log('🔍 Checking for existing session...');
       const { data } = await supabase.auth.getSession();
-      setSession(data.session);
-      if (data.session?.user) await fetchProfile(data.session.user.id);
-    };
-    loadSession();
 
+      if (data.session) {
+        console.log('⚙️ Active session found.');
+        setSession(data.session);
+        if (data.session.user) await fetchProfile(data.session.user.id);
+      } else {
+        console.log('🚫 No active session found.');
+        setSession(null);
+      }
+    };
+
+    initAuth();
+
+    // Auth state listener
     const { data: listener } = supabase.auth.onAuthStateChange(async (_, session) => {
+      console.log('🧭 Auth state changed:', session);
       setSession(session);
       if (session?.user) await fetchProfile(session.user.id);
       else setProfile(null);
@@ -31,8 +43,8 @@ export default function App() {
   }, []);
 
   async function fetchProfile(userId) {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    if (data) setProfile(data);
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    if (!error && data) setProfile(data);
   }
 
   function ProtectedRoute({ children, role }) {
@@ -72,7 +84,7 @@ export default function App() {
             }
           />
 
-          <Route path="*" element={<div>Page not found</div>} />
+          <Route path="*" element={<div>404 | Page not found</div>} />
         </Routes>
       </div>
     </Router>
