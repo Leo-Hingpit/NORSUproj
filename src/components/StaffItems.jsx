@@ -1,5 +1,3 @@
-//new code
-
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { v4 as uuidv4 } from 'uuid';
@@ -17,16 +15,30 @@ export default function StaffItems() {
   });
   const [loading, setLoading] = useState(false);
 
+  // ✅ Fetch items initially and when database changes
   useEffect(() => {
     fetchItems();
+
+    const channel = supabase
+      .channel('table_items-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'table_items' }, () => {
+        console.log('🔄 Table changed, refreshing items...');
+        fetchItems();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   async function fetchItems() {
     const { data, error } = await supabase
-      .from('items')
+      .from('table_items')
       .select('*')
       .order('created_at', { ascending: false });
-    if (!error) setItems(data || []);
+    if (error) console.error('❌ Fetch error:', error.message);
+    else setItems(data || []);
   }
 
   function openCreate() {
@@ -53,25 +65,22 @@ export default function StaffItems() {
     });
   }
 
+  // ✅ Upload image to the correct bucket 'item'
   async function uploadImage(file) {
     if (!file) return null;
-
     const fileExt = file.name.split('.').pop();
     const fileName = `${uuidv4()}.${fileExt}`;
-    const filePath = `${fileName}`;
+    const filePath = `public/${fileName}`;
 
-    // Upload image to the 'items' bucket
-    const { error: uploadError } = await supabase.storage
-      .from('items')
-      .upload(filePath, file);
-
+    console.log('📤 Uploading to Supabase bucket: item');
+    const { error: uploadError } = await supabase.storage.from('item').upload(filePath, file);
     if (uploadError) {
-      console.error('❌ Error uploading image:', uploadError.message);
+      console.error('❌ Image upload failed:', uploadError.message);
       return null;
     }
 
-    // Get public URL
-    const { data } = supabase.storage.from('items').getPublicUrl(filePath);
+    const { data } = supabase.storage.from('item').getPublicUrl(filePath);
+    console.log('✅ Uploaded image URL:', data.publicUrl);
     return data.publicUrl;
   }
 
@@ -81,10 +90,7 @@ export default function StaffItems() {
 
     try {
       let imageUrl = form.image_url;
-
-      if (form.imageFile) {
-        imageUrl = await uploadImage(form.imageFile);
-      }
+      if (form.imageFile) imageUrl = await uploadImage(form.imageFile);
 
       const itemData = {
         name: form.name,
@@ -94,20 +100,11 @@ export default function StaffItems() {
         image_url: imageUrl
       };
 
-      if (editing) {
-        const { error } = await supabase
-          .from('items')
-          .update(itemData)
-          .eq('id', editing);
-        if (error) throw error;
-      } else {
-        const id = uuidv4();
-        const { error } = await supabase
-          .from('items')
-          .insert([{ id, ...itemData }]);
-        if (error) throw error;
-      }
+      const { error } = editing
+        ? await supabase.from('table_items').update(itemData).eq('id', editing)
+        : await supabase.from('table_items').insert([itemData]);
 
+      if (error) throw error;
       await fetchItems();
       openCreate();
     } catch (err) {
@@ -119,28 +116,26 @@ export default function StaffItems() {
 
   async function remove(id) {
     if (!window.confirm('Delete this item?')) return;
-    await supabase.from('items').delete().eq('id', id);
-    await fetchItems();
+    const { error } = await supabase.from('table_items').delete().eq('id', id);
+    if (error) console.error('❌ Delete error:', error.message);
+    else fetchItems();
   }
 
   async function toggleAvailable(item) {
-    await supabase
-      .from('items')
+    const { error } = await supabase
+      .from('table_items')
       .update({ available: !item.available })
       .eq('id', item.id);
-    await fetchItems();
+    if (error) console.error('❌ Toggle error:', error.message);
+    else fetchItems();
   }
 
   return (
     <div>
       <h3>Manage Items</h3>
       <div className="mb-3">
-        <button className="btn btn-success me-2" onClick={openCreate}>
-          Create New
-        </button>
-        <button className="btn btn-secondary" onClick={fetchItems}>
-          Refresh
-        </button>
+        <button className="btn btn-success me-2" onClick={openCreate}>Create New</button>
+        <button className="btn btn-secondary" onClick={fetchItems}>Refresh</button>
       </div>
 
       <div className="row">
@@ -149,70 +144,56 @@ export default function StaffItems() {
             <div className="card-body">
               <h5>{editing ? 'Edit Item' : 'Create Item'}</h5>
               <form onSubmit={save}>
-                <div className="mb-2">
-                  <input
-                    className="form-control"
-                    placeholder="Name"
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    required
+                <input
+                  className="form-control mb-2"
+                  placeholder="Name"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  required
+                />
+                <textarea
+                  className="form-control mb-2"
+                  placeholder="Description"
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                />
+                <input
+                  className="form-control mb-2"
+                  placeholder="Price"
+                  type="number"
+                  step="0.01"
+                  value={form.price}
+                  onChange={(e) => setForm({ ...form, price: e.target.value })}
+                  required
+                />
+                <label className="form-label">Image Upload</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="form-control mb-2"
+                  onChange={(e) => setForm({ ...form, imageFile: e.target.files[0] })}
+                />
+                {form.image_url && (
+                  <img
+                    src={form.image_url}
+                    alt="preview"
+                    className="mt-2"
+                    style={{ width: '100%', borderRadius: '8px' }}
                   />
-                </div>
-                <div className="mb-2">
-                  <textarea
-                    className="form-control"
-                    placeholder="Description"
-                    value={form.description}
-                    onChange={(e) =>
-                      setForm({ ...form, description: e.target.value })
-                    }
-                  />
-                </div>
-                <div className="mb-2">
-                  <input
-                    className="form-control"
-                    placeholder="Price"
-                    type="number"
-                    step="0.01"
-                    value={form.price}
-                    onChange={(e) => setForm({ ...form, price: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="mb-2">
-                  <label className="form-label">Image Upload</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="form-control"
-                    onChange={(e) =>
-                      setForm({ ...form, imageFile: e.target.files[0] })
-                    }
-                  />
-                  {form.image_url && (
-                    <img
-                      src={form.image_url}
-                      alt="preview"
-                      className="mt-2"
-                      style={{ width: '100%', borderRadius: '8px' }}
-                    />
-                  )}
-                </div>
-                <div className="mb-2 form-check">
+                )}
+                <div className="form-check mb-2">
                   <input
                     type="checkbox"
                     className="form-check-input"
                     id="avail"
                     checked={form.available}
-                    onChange={(e) =>
-                      setForm({ ...form, available: e.target.checked })
-                    }
+                    onChange={(e) => setForm({ ...form, available: e.target.checked })}
                   />
                   <label className="form-check-label" htmlFor="avail">
                     Available
                   </label>
                 </div>
-                <button className="btn btn-primary" disabled={loading} type="submit">
+                <button className="btn btn-primary" disabled={loading}>
                   {loading ? 'Processing...' : 'Save'}
                 </button>
               </form>
@@ -234,31 +215,15 @@ export default function StaffItems() {
                     />
                   )}
                   <div>
-                    <strong>{it.name}</strong> <br />
-                    <small>{it.description}</small>
-                    <br />
+                    <strong>{it.name}</strong><br />
+                    <small>{it.description}</small><br />
                     <small>₱{it.price}</small>
                   </div>
                 </div>
                 <div>
-                  <button
-                    className="btn btn-sm btn-outline-primary me-2"
-                    onClick={() => openEdit(it)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-sm btn-outline-danger me-2"
-                    onClick={() => remove(it.id)}
-                  >
-                    Delete
-                  </button>
-                  <button
-                    className={`btn btn-sm ${
-                      it.available ? 'btn-success' : 'btn-warning'
-                    }`}
-                    onClick={() => toggleAvailable(it)}
-                  >
+                  <button className="btn btn-sm btn-outline-primary me-2" onClick={() => openEdit(it)}>Edit</button>
+                  <button className="btn btn-sm btn-outline-danger me-2" onClick={() => remove(it.id)}>Delete</button>
+                  <button className={`btn btn-sm ${it.available ? 'btn-success' : 'btn-warning'}`} onClick={() => toggleAvailable(it)}>
                     {it.available ? 'Available' : 'Unavailable'}
                   </button>
                 </div>
