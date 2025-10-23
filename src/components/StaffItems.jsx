@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -11,36 +11,79 @@ export default function StaffItems() {
     price: '',
     imageFile: null,
     image_url: '',
-    available: true
+    available: true,
   });
   const [loading, setLoading] = useState(false);
+  const hasFetchedOnce = useRef(false); // Prevent redundant fetches
 
-  // ✅ Fetch items initially and when database changes
-  useEffect(() => {
-    fetchItems();
-
-    const channel = supabase
-      .channel('table_items-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'table_items' }, () => {
-        console.log('🔄 Table changed, refreshing items...');
-        fetchItems();
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  async function fetchItems() {
+  // ✅ Fast fetch with caching behavior
+  async function fetchItems(showLog = true) {
+    if (showLog) console.log('📦 Fetching items...');
     const { data, error } = await supabase
       .from('table_items')
       .select('*')
       .order('created_at', { ascending: false });
-    if (error) console.error('❌ Fetch error:', error.message);
-    else setItems(data || []);
+
+    if (error) {
+      console.error('❌ Fetch error:', error.message);
+      return;
+    }
+
+    setItems(data || []);
+    if (showLog) console.log(`✅ Fetched ${data?.length || 0} items`);
   }
 
+  // ✅ Handle realtime table changes
+  function handleRealtimeUpdate(payload) {
+    console.log('🔄 Realtime event:', payload.eventType);
+    fetchItems(false);
+  }
+
+  useEffect(() => {
+    // Fetch once when mounted
+    if (!hasFetchedOnce.current) {
+      fetchItems();
+      hasFetchedOnce.current = true;
+    }
+
+    // ✅ Subscribe to realtime changes
+    const channel = supabase
+      .channel('table_items_realtime_fast')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'table_items' },
+        (payload) => handleRealtimeUpdate(payload)
+      )
+      .subscribe((status) => {
+        console.log('🔌 Realtime status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('🟢 Reconnected — refreshing data...');
+          fetchItems(false);
+        }
+      });
+
+    // ✅ Re-fetch when user returns to tab
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('👀 Tab focused — refreshing data...');
+        fetchItems(false);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // ✅ Heartbeat to keep Supabase session alive (every 5 mins)
+    const heartbeat = setInterval(async () => {
+      await supabase.auth.getSession();
+    }, 300000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(heartbeat);
+    };
+  }, []);
+
+  // ✅ Reset form for new item
   function openCreate() {
     setEditing(null);
     setForm({
@@ -49,10 +92,11 @@ export default function StaffItems() {
       price: '',
       imageFile: null,
       image_url: '',
-      available: true
+      available: true,
     });
   }
 
+  // ✅ Load item into edit form
   function openEdit(item) {
     setEditing(item.id);
     setForm({
@@ -61,29 +105,30 @@ export default function StaffItems() {
       price: item.price,
       image_url: item.image_url,
       imageFile: null,
-      available: item.available
+      available: item.available,
     });
   }
 
-  // ✅ Upload image to the correct bucket 'item'
+  // ✅ Upload image to Supabase bucket 'item'
   async function uploadImage(file) {
     if (!file) return null;
     const fileExt = file.name.split('.').pop();
     const fileName = `${uuidv4()}.${fileExt}`;
     const filePath = `public/${fileName}`;
 
-    console.log('📤 Uploading to Supabase bucket: item');
+    console.log('📤 Uploading image to Supabase bucket: item');
     const { error: uploadError } = await supabase.storage.from('item').upload(filePath, file);
     if (uploadError) {
-      console.error('❌ Image upload failed:', uploadError.message);
+      console.error('❌ Upload failed:', uploadError.message);
       return null;
     }
 
     const { data } = supabase.storage.from('item').getPublicUrl(filePath);
-    console.log('✅ Uploaded image URL:', data.publicUrl);
+    console.log('✅ Image uploaded:', data.publicUrl);
     return data.publicUrl;
   }
 
+  // ✅ Save (insert/update) item
   async function save(e) {
     e.preventDefault();
     setLoading(true);
@@ -97,7 +142,7 @@ export default function StaffItems() {
         description: form.description,
         price: parseFloat(form.price),
         available: form.available,
-        image_url: imageUrl
+        image_url: imageUrl,
       };
 
       const { error } = editing
@@ -105,7 +150,8 @@ export default function StaffItems() {
         : await supabase.from('table_items').insert([itemData]);
 
       if (error) throw error;
-      await fetchItems();
+
+      await fetchItems(false);
       openCreate();
     } catch (err) {
       console.error('❌ Save failed:', err.message);
@@ -118,7 +164,7 @@ export default function StaffItems() {
     if (!window.confirm('Delete this item?')) return;
     const { error } = await supabase.from('table_items').delete().eq('id', id);
     if (error) console.error('❌ Delete error:', error.message);
-    else fetchItems();
+    else fetchItems(false);
   }
 
   async function toggleAvailable(item) {
@@ -127,18 +173,23 @@ export default function StaffItems() {
       .update({ available: !item.available })
       .eq('id', item.id);
     if (error) console.error('❌ Toggle error:', error.message);
-    else fetchItems();
+    else fetchItems(false);
   }
 
   return (
     <div>
       <h3>Manage Items</h3>
       <div className="mb-3">
-        <button className="btn btn-success me-2" onClick={openCreate}>Create New</button>
-        <button className="btn btn-secondary" onClick={fetchItems}>Refresh</button>
+        <button className="btn btn-success me-2" onClick={openCreate}>
+          Create New
+        </button>
+        <button className="btn btn-secondary" onClick={() => fetchItems(false)}>
+          Refresh
+        </button>
       </div>
 
       <div className="row">
+        {/* 📝 Form Section */}
         <div className="col-md-6">
           <div className="card mb-3">
             <div className="card-body">
@@ -201,10 +252,11 @@ export default function StaffItems() {
           </div>
         </div>
 
+        {/* 📋 Items List Section */}
         <div className="col-md-6">
           <h5>Items List</h5>
           {items.map((it) => (
-            <div key={it.id} className="card mb-2">
+            <div key={it.id} className="card mb-2 shadow-sm">
               <div className="card-body d-flex justify-content-between align-items-center">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   {it.image_url && (
@@ -215,15 +267,24 @@ export default function StaffItems() {
                     />
                   )}
                   <div>
-                    <strong>{it.name}</strong><br />
-                    <small>{it.description}</small><br />
+                    <strong>{it.name}</strong>
+                    <br />
+                    <small>{it.description}</small>
+                    <br />
                     <small>₱{it.price}</small>
                   </div>
                 </div>
                 <div>
-                  <button className="btn btn-sm btn-outline-primary me-2" onClick={() => openEdit(it)}>Edit</button>
-                  <button className="btn btn-sm btn-outline-danger me-2" onClick={() => remove(it.id)}>Delete</button>
-                  <button className={`btn btn-sm ${it.available ? 'btn-success' : 'btn-warning'}`} onClick={() => toggleAvailable(it)}>
+                  <button className="btn btn-sm btn-outline-primary me-2" onClick={() => openEdit(it)}>
+                    Edit
+                  </button>
+                  <button className="btn btn-sm btn-outline-danger me-2" onClick={() => remove(it.id)}>
+                    Delete
+                  </button>
+                  <button
+                    className={`btn btn-sm ${it.available ? 'btn-success' : 'btn-warning'}`}
+                    onClick={() => toggleAvailable(it)}
+                  >
                     {it.available ? 'Available' : 'Unavailable'}
                   </button>
                 </div>
