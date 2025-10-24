@@ -1,41 +1,71 @@
 // src/components/Navbar.jsx
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 
-export default function Navbar({ session, profile }) {
+export default function Navbar() {
   const navigate = useNavigate();
+  const [profile, setProfile] = useState(null);
+  const [session, setSession] = useState(null);
+
+  // 🧠 Load session + profile from localStorage on mount
+ useEffect(() => {
+    function loadFromStorage() {
+      try {
+        const savedProfile = localStorage.getItem('profile');
+        const savedSession = localStorage.getItem('sb-afwetlctquuvyuefmjme-auth-token');
+
+        setProfile(savedProfile ? JSON.parse(savedProfile) : null);
+        setSession(savedSession ? JSON.parse(savedSession) : null);
+      } catch (err) {
+        console.error('⚠️ Failed to parse localStorage data:', err);
+      }
+    }
+
+    // ✅ Load initially
+    loadFromStorage();
+
+    // ✅ Listen for changes (like login)
+    window.addEventListener('storage', loadFromStorage);
+
+    // ✅ Also check every 1s (helps in single-tab apps)
+    const interval = setInterval(loadFromStorage, 1000);
+
+    // ✅ Cleanup
+    return () => {
+      window.removeEventListener('storage', loadFromStorage);
+      clearInterval(interval);
+    };
+  }, []);
 
   async function signOut() {
-  console.log('🧭 Sign-out button clicked');
+    console.log('🧭 Sign-out button clicked');
 
-  try {
-    // Start async sign out but don’t block UI
-    supabase.auth.signOut()
-      .then(({ error }) => {
+    try {
+      // Start Supabase sign out in background
+      supabase.auth.signOut().then(({ error }) => {
         if (error) console.error('❌ Supabase signOut error:', error.message);
         else console.log('✅ Supabase signOut completed in background');
       });
 
-    // 🔥 Instantly clear local/session tokens
-    console.log('🧹 Forcing local session clear...');
-    localStorage.clear();
-    sessionStorage.clear();
+      // 🔥 Instantly clear local/session tokens
+      console.log('🧹 Clearing local storage...');
+      localStorage.clear();
+      sessionStorage.clear();
 
-    // Navigate immediately (don’t wait for Supabase)
-    console.log('➡️ Redirecting to /admin ...');
-    navigate('/admin', { replace: true });
+      // Navigate immediately
+      console.log('➡️ Redirecting to /admin...');
+      navigate('/admin', { replace: true });
 
-    // Force reload to fully reset auth state
-    setTimeout(() => {
-      console.log('🔄 Hard reload for fresh state...');
-      window.location.reload();
-    }, 100);
-  } catch (error) {
-    console.error('💥 Sign-out failed:', error);
+      // Force reload to reset state
+      setTimeout(() => {
+        console.log('🔄 Hard reload for fresh state...');
+        window.location.reload();
+      }, 100);
+    } catch (error) {
+      console.error('💥 Sign-out failed:', error);
+    }
   }
-}
-
 
   return (
     <nav className="navbar navbar-expand-lg navbar-light bg-light shadow-sm">
