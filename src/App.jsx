@@ -33,44 +33,41 @@ function AppContent() {
     let timeout;
     const initAuth = async () => {
       console.log('🔍 Checking for existing Supabase session...');
-
       try {
-        // Set a 5-second timeout fallback
+        // Timeout fallback in case Supabase hangs
         timeout = setTimeout(() => {
           console.warn('⚠️ Session check timeout reached, continuing...');
           setLoadingSession(false);
-        }, 5000);
+        }, 4000);
 
+        // ✅ Get saved session
         const { data, error } = await supabase.auth.getSession();
+        if (error) console.error('❌ Error getting session:', error.message);
 
-        if (error) {
-          console.error('❌ Error getting session:', error.message);
-          setLoadingSession(false);
-          return;
-        }
+        const currentSession = data?.session;
+        setSession(currentSession);
 
-        console.log('🧩 Session data:', data);
-
-        setSession(data.session);
-        if (data.session?.user) {
-          console.log('✅ Existing session:', data.session.user.email);
-          await fetchProfile(data.session.user.id);
+        if (currentSession?.user) {
+          console.log('✅ Restored session:', currentSession.user.email);
+          await fetchProfile(currentSession.user.id);
         } else {
           console.log('🚫 No active session found.');
+          setProfile(null);
         }
       } catch (err) {
-        console.error('💥 Exception while checking session:', err.message);
+        console.error('💥 Exception during session load:', err.message);
       } finally {
         clearTimeout(timeout);
-        setLoadingSession(false); // ✅ Always stop loading
+        setLoadingSession(false);
       }
     };
 
     initAuth();
 
+    // ✅ Listen for login/logout/tab changes
     const { data: listener } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log(`🔄 Auth state changed: ${event}`, session);
+        console.log(`🔄 Auth event: ${event}`, session);
         setSession(session);
 
         if (session?.user) {
@@ -103,9 +100,9 @@ function AppContent() {
     }
   }
 
+  // ✅ Protect routes and prevent premature redirect
   function ProtectedRoute({ children, role }) {
     if (loadingSession) {
-      console.log('⏳ Waiting for session check...');
       return (
         <div className="text-center mt-5">
           <div className="spinner-border text-primary" role="status"></div>
@@ -120,13 +117,14 @@ function AppContent() {
     }
 
     if (role && profile?.role !== role) {
-      console.warn('⚠️ Unauthorized role — redirecting to menu');
+      console.warn('⚠️ Unauthorized role — redirecting to /menu');
       return <Navigate to="/menu" replace />;
     }
 
     return children;
   }
 
+  // ✅ Wait for Supabase before showing anything
   if (loadingSession) {
     return (
       <div className="text-center mt-5">
@@ -145,6 +143,7 @@ function AppContent() {
           <Route path="/student-auth" element={<StudentAuth />} />
           <Route path="/admin" element={<AdminAuth />} />
 
+          {/* Student pages */}
           <Route
             path="/menu"
             element={<StudentMenu session={session} profile={profile} />}
@@ -154,6 +153,7 @@ function AppContent() {
             element={<Cart session={session} profile={profile} />}
           />
 
+          {/* Admin/Staff pages */}
           <Route
             path="/admin/dashboard"
             element={
