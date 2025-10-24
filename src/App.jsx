@@ -86,41 +86,84 @@ function AppContent() {
 
   async function fetchProfile(userId) {
     console.log('📄 Fetching profile for user:', userId);
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
 
-    if (error) {
-      console.error('❌ Error fetching profile:', error.message);
-    } else {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (error) throw error;
+
       console.log('✅ Profile loaded:', data);
       setProfile(data);
+
+      // 🧠 Save to localStorage for faster reload
+      localStorage.setItem('profile', JSON.stringify(data));
+    } catch (err) {
+      console.error('❌ Error fetching profile:', err.message);
     }
   }
 
   // ✅ Protect routes and prevent premature redirect
   function ProtectedRoute({ children, role }) {
-    if (loadingSession) {
+    const [localSession, setLocalSession] = useState(null);
+    const [localProfile, setLocalProfile] = useState(null);
+
+    // 🧠 Load session and profile from localStorage (if available)
+    useEffect(() => {
+      const savedSession = localStorage.getItem('sb-afwetlctquuvyuefmjme-auth-token');
+      const savedProfile = localStorage.getItem('profile');
+
+      if (savedSession) {
+        try {
+          setLocalSession(JSON.parse(savedSession));
+        } catch {
+          localStorage.removeItem('sb-afwetlctquuvyuefmjme-auth-token');
+        }
+      }
+
+      if (savedProfile) {
+        try {
+          setLocalProfile(JSON.parse(savedProfile));
+        } catch {
+          localStorage.removeItem('profile');
+        }
+      }
+    }, []);
+
+    // ✅ Determine the effective session/profile to use
+    const effectiveSession = session || localSession;
+    const effectiveProfile = profile || localProfile;
+
+    // ⏳ Wait for both to be ready
+    if (loadingSession || (effectiveSession && !effectiveProfile)) {
+      console.log('⏳ Waiting for session/profile...', {
+        effectiveSession,
+        effectiveProfile,
+      });
       return (
         <div className="text-center mt-5">
           <div className="spinner-border text-primary" role="status"></div>
-          <p>Checking session...</p>
+          <p>Loading profile...</p>
         </div>
       );
     }
 
-    if (!session) {
+    // 🚫 Not logged in
+    if (!effectiveSession) {
       console.warn('⚠️ No session found — redirecting to /admin');
       return <Navigate to="/admin" state={{ from: location }} replace />;
     }
 
-    if (role && profile?.role !== role) {
+    // 🚫 Role mismatch
+    if (role && effectiveProfile?.role !== role) {
       console.warn('⚠️ Unauthorized role — redirecting to /menu');
       return <Navigate to="/menu" replace />;
     }
 
+    // ✅ All good
     return children;
   }
 
@@ -136,7 +179,7 @@ function AppContent() {
 
   return (
     <>
-      <Navbar session={session} profile={profile} />
+      <Navbar/>
       <div className="container mt-4">
         <Routes>
           <Route path="/" element={<Navigate to="/menu" replace />} />
