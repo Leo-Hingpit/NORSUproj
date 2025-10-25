@@ -111,7 +111,7 @@ export default function StaffOrders() {
       {/* Filter Buttons */}
       <div className="mb-3 d-flex align-items-center gap-2">
         <label className="form-label fw-bold me-2">Filter:</label>
-        {["All", "Pending", "In Progress", "Complete"].map((status) => (
+        {["All", "Pending", "In Progress", "Completed"].map((status) => (
           <button
             key={status}
             className={`btn btn-sm ${
