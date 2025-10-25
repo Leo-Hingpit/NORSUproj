@@ -169,14 +169,7 @@ export default function StaffItems() {
   return (
     <div>
       <h3>Manage Items</h3>
-      <div className="mb-3">
-        <button className="btn btn-success me-2" onClick={openCreate}>
-          Create New
-        </button>
-        <button className="btn btn-secondary" onClick={() => refetch()}>
-          {isFetching ? "Refreshing..." : "Refresh"}
-        </button>
-      </div>
+      
 
       <div className="row">
         {/* Form Section */}
