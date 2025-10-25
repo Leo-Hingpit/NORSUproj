@@ -14,12 +14,37 @@ import StaffOrders from './components/StaffOrders';
 import StudentMenu from './components/StudentMenu';
 import Cart from './components/Cart';
 import Navbar from './components/Navbar';
+import {
+  QueryClient,
+} from "@tanstack/react-query";
+import {
+  PersistQueryClientProvider,
+} from "@tanstack/react-query-persist-client";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
+
+
+// 🧠 Create the QueryClient
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 0,
+      cacheTime: 1000 * 60 * 10, // cache for 10 min
+    },
+  },
+});
+
+// 💾 Create a persister (this uses sessionStorage so no extra library needed)
+const persister = createSyncStoragePersister({
+  storage: window.sessionStorage,
+});
 
 export default function App() {
   return (
-    <Router>
-      <AppContent />
-    </Router>
+    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister }}>
+      <Router>
+        <AppContent />
+      </Router>
+    </PersistQueryClientProvider>
   );
 }
 
