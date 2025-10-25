@@ -10,7 +10,7 @@ export default function StudentMenu({ session, profile }) {
 
   const isStaff = profile?.role === "staff";
 
-  // ✅ React Query: Cached fetch
+  // ✅ React Query: Keeps cache even when you change pages or refresh
   const {
     data: items = [],
     isLoading,
@@ -18,7 +18,7 @@ export default function StudentMenu({ session, profile }) {
   } = useQuery({
     queryKey: ["itemsMenu"],
     queryFn: async () => {
-      console.log("📌 Fetching available menu items...");
+      console.log("📌 Fetching menu items...");
 
       const { data, error } = await supabase
         .from("table_items")
@@ -29,19 +29,19 @@ export default function StudentMenu({ session, profile }) {
       if (error) throw error;
       return data;
     },
+    staleTime: 1000 * 60, // ✅ Keep data cached for 1 minute
     refetchOnWindowFocus: true,
-    staleTime: 1000 * 60, // ✅ Cache for 1 minute
   });
 
-  // ✅ Supabase realtime auto-refresh (INSERT / UPDATE / DELETE)
+  // ✅ Realtime Listener: Auto update when admin edits products
   React.useEffect(() => {
     const channel = supabase
-      .channel("realtime-menu")
+      .channel("menu-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "table_items" },
-        (payload) => {
-          console.log("🔄 Realtime update:", payload);
+        () => {
+          console.log("🔄 Menu updated automatically");
           queryClient.invalidateQueries(["itemsMenu"]);
         }
       )
@@ -50,9 +50,10 @@ export default function StudentMenu({ session, profile }) {
     return () => supabase.removeChannel(channel);
   }, [queryClient]);
 
+  // ✅ Secure Add to Cart check
   function addToCart(item) {
-    if (!session || isStaff) {
-      alert("Please login as a student to order!");
+    if (!session || profile?.role !== "student") {
+      alert("Only students can place food orders!");
       navigate("/student-auth");
       return;
     }
@@ -60,8 +61,11 @@ export default function StudentMenu({ session, profile }) {
     const cart = JSON.parse(localStorage.getItem("cart") || "[]");
     const found = cart.find((c) => c.id === item.id);
 
-    if (found) found.qty += 1;
-    else cart.push({ ...item, qty: 1 });
+    if (found) {
+      found.qty += 1;
+    } else {
+      cart.push({ ...item, qty: 1 });
+    }
 
     localStorage.setItem("cart", JSON.stringify(cart));
     alert(`${item.name} added to cart 🛒`);
@@ -78,7 +82,7 @@ export default function StudentMenu({ session, profile }) {
   return (
     <div className="container mt-4">
       <h3 className="mb-4">
-        Menu {isFetching && <small className="text-muted">(Refreshing...)</small>}
+        Menu {isFetching && <small className="text-muted">(Refreshing…)</small>}
       </h3>
 
       <div className="row">
@@ -108,8 +112,8 @@ export default function StudentMenu({ session, profile }) {
                 <div className="mt-auto d-flex justify-content-between align-items-center">
                   <strong>₱{it.price}</strong>
 
-                  {/* ✅ Hide Add button for staff */}
-                  {!isStaff && (
+                  {/* ✅ Staff cannot add to cart */} 
+                  {profile?.role === "student" && (
                     <button
                       className="btn btn-sm btn-primary"
                       onClick={() => addToCart(it)}
