@@ -1,23 +1,21 @@
 // src/components/StudentOrderHistory.jsx
-import React, { useEffect, useState } from "react";
+import React from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../supabaseClient";
 
 export default function StudentOrderHistory() {
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const userId = localStorage.getItem("user_id");
 
-  useEffect(() => {
-    const loadOrders = async () => {
-      console.log("📌 Fetching order history...");
-
-      const userId = localStorage.getItem("user_id");
-      console.log("👤 Loaded userId:", userId);
-
-      if (!userId) {
-        console.warn("🚫 No stored userId. User may not be signed in.");
-        setLoading(false);
-        return;
-      }
+  // 🔄 React Query: Cached fetch
+  const {
+    data: orders = [],
+    isFetching,
+    isLoading,
+  } = useQuery({
+    queryKey: ["orderHistory", userId],
+    queryFn: async () => {
+      console.log("📌 Fetching order history for:", userId);
 
       const { data, error } = await supabase
         .from("table_orders")
@@ -25,30 +23,53 @@ export default function StudentOrderHistory() {
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
-      if (error) {
-        console.error("❌ Failed to load history:", error.message);
-      } else {
-        console.log("✅ Orders:", data);
-        setOrders(data || []);
-      }
+      if (error) throw error;
+      console.log("✅ History:", data);
+      return data;
+    },
+    enabled: !!userId,
+    refetchOnWindowFocus: true, // ✅ reload if tab switches back
+    staleTime: 1000 * 60, // ✅ 1 min cache
+  });
 
-      setLoading(false);
-    };
+  // ✅ Supabase realtime auto refresh
+  React.useEffect(() => {
+    if (!userId) return;
 
-    loadOrders();
-  }, []);
+    const channel = supabase
+      .channel("realtime-orders")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "table_orders" },
+        (payload) => {
+          console.log("🔁 Realtime order update:", payload);
+          queryClient.invalidateQueries(["orderHistory", userId]);
+        }
+      )
+      .subscribe();
 
-  if (loading)
+    return () => supabase.removeChannel(channel);
+  }, [queryClient, userId]);
+
+  if (!userId) {
     return (
       <div className="text-center mt-5">
-        <div className="spinner-border text-primary" role="status"></div>
+        <p>You must be signed in to view orders.</p>
+      </div>
+    );
+  }
+
+  if (isLoading)
+    return (
+      <div className="text-center mt-5">
+        <div className="spinner-border"></div>
         <p>Loading order history...</p>
       </div>
     );
 
   return (
     <div className="container mt-4">
-      <h3 className="mb-3">📜 Order History</h3>
+      <h3 className="mb-3">📜 Order History {isFetching && "(Refreshing...)"}</h3>
 
       {orders.length === 0 ? (
         <p>No orders yet.</p>
