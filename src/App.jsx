@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+// src/App.jsx
+import React, { useEffect, useState } from "react";
 import {
   BrowserRouter as Router,
   Routes,
@@ -10,16 +11,42 @@ import { supabase } from './supabaseClient';
 import StudentAuth from './components/StudentAuth';
 import AdminAuth from './components/AdminAuth';
 import AdminDashboard from './components/AdminDashboard';
+import StudentOrderHistory from './components/StudentOrderHistory';
 import StaffOrders from './components/StaffOrders';
 import StudentMenu from './components/StudentMenu';
 import Cart from './components/Cart';
 import Navbar from './components/Navbar';
+import {
+  QueryClient,
+} from "@tanstack/react-query";
+import {
+  PersistQueryClientProvider,
+} from "@tanstack/react-query-persist-client";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
+
+
+// 🧠 Create the QueryClient
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 0,
+      cacheTime: 1000 * 60 * 10, // cache for 10 min
+    },
+  },
+});
+
+// 💾 Create a persister (this uses sessionStorage so no extra library needed)
+const persister = createSyncStoragePersister({
+  storage: window.sessionStorage,
+});
 
 export default function App() {
   return (
-    <Router>
-      <AppContent />
-    </Router>
+    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister }}>
+      <Router>
+        <AppContent />
+      </Router>
+    </PersistQueryClientProvider>
   );
 }
 
@@ -32,30 +59,26 @@ function AppContent() {
   useEffect(() => {
     let timeout;
     const initAuth = async () => {
-      console.log('🔍 Checking for existing Supabase session...');
+      console.log("🔍 Checking for existing Supabase session...");
       try {
-        // Timeout fallback in case Supabase hangs
         timeout = setTimeout(() => {
-          console.warn('⚠️ Session check timeout reached, continuing...');
+          console.warn("⚠️ Session check timeout, continuing...");
           setLoadingSession(false);
-        }, 4000);
+        }, 3000);
 
-        // ✅ Get saved session
-        const { data, error } = await supabase.auth.getSession();
-        if (error) console.error('❌ Error getting session:', error.message);
+        // ✅ Get session from Supabase
+        const { data } = await supabase.auth.getSession();
+        const current = data?.session;
+        setSession(current);
 
-        const currentSession = data?.session;
-        setSession(currentSession);
-
-        if (currentSession?.user) {
-          console.log('✅ Restored session:', currentSession.user.email);
-          await fetchProfile(currentSession.user.id);
+        if (current?.user) {
+          console.log("✅ Restored user:", current.user.email);
+          await fetchProfile(current.user.id);
         } else {
-          console.log('🚫 No active session found.');
           setProfile(null);
         }
       } catch (err) {
-        console.error('💥 Exception during session load:', err.message);
+        console.error("💥 Session load error:", err);
       } finally {
         clearTimeout(timeout);
         setLoadingSession(false);
@@ -66,15 +89,12 @@ function AppContent() {
 
     // ✅ Listen for login/logout/tab changes
     const { data: listener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log(`🔄 Auth event: ${event}`, session);
+      async (_, session) => {
+        console.log("🔄 Auth event fired", session);
         setSession(session);
 
-        if (session?.user) {
-          await fetchProfile(session.user.id);
-        } else {
-          setProfile(null);
-        }
+        if (session?.user) await fetchProfile(session.user.id);
+        else setProfile(null);
       }
     );
 
@@ -85,93 +105,52 @@ function AppContent() {
   }, []);
 
   async function fetchProfile(userId) {
-    console.log('📄 Fetching profile for user:', userId);
+    console.log("📄 Fetching profile:", userId);
+    const { data } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .single();
 
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
+    console.log("✅ Profile loaded:", data);
 
-      if (error) throw error;
-
-      console.log('✅ Profile loaded:', data);
-      setProfile(data);
-
-      // 🧠 Save to localStorage for faster reload
-      localStorage.setItem('profile', JSON.stringify(data));
-    } catch (err) {
-      console.error('❌ Error fetching profile:', err.message);
-    }
+    setProfile(data);
+    localStorage.setItem("profile", JSON.stringify(data));
   }
 
-  // ✅ Protect routes and prevent premature redirect
   function ProtectedRoute({ children, role }) {
-    const [localSession, setLocalSession] = useState(null);
-    const [localProfile, setLocalProfile] = useState(null);
+    const savedSession = localStorage.getItem(
+      "sb-afwetlctquuvyuefmjme-auth-token"
+    );
+    const savedProfile = localStorage.getItem("profile");
 
-    // 🧠 Load session and profile from localStorage (if available)
-    useEffect(() => {
-      const savedSession = localStorage.getItem('sb-afwetlctquuvyuefmjme-auth-token');
-      const savedProfile = localStorage.getItem('profile');
+    const effectiveSession = session || (savedSession && JSON.parse(savedSession));
+    const effectiveProfile = profile || (savedProfile && JSON.parse(savedProfile));
 
-      if (savedSession) {
-        try {
-          setLocalSession(JSON.parse(savedSession));
-        } catch {
-          localStorage.removeItem('sb-afwetlctquuvyuefmjme-auth-token');
-        }
-      }
-
-      if (savedProfile) {
-        try {
-          setLocalProfile(JSON.parse(savedProfile));
-        } catch {
-          localStorage.removeItem('profile');
-        }
-      }
-    }, []);
-
-    // ✅ Determine the effective session/profile to use
-    const effectiveSession = session || localSession;
-    const effectiveProfile = profile || localProfile;
-
-    // ⏳ Wait for both to be ready
     if (loadingSession || (effectiveSession && !effectiveProfile)) {
-      console.log('⏳ Waiting for session/profile...', {
-        effectiveSession,
-        effectiveProfile,
-      });
       return (
         <div className="text-center mt-5">
-          <div className="spinner-border text-primary" role="status"></div>
+          <div className="spinner-border"></div>
           <p>Loading profile...</p>
         </div>
       );
     }
 
-    // 🚫 Not logged in
-    if (!effectiveSession) {
-      console.warn('⚠️ No session found — redirecting to /admin');
+    // 🚫 If logged out → redirect
+    if (!effectiveSession)
       return <Navigate to="/admin" state={{ from: location }} replace />;
-    }
 
     // 🚫 Role mismatch
-    if (role && effectiveProfile?.role !== role) {
-      console.warn('⚠️ Unauthorized role — redirecting to /menu');
+    if (role && effectiveProfile?.role !== role)
       return <Navigate to="/menu" replace />;
-    }
 
-    // ✅ All good
     return children;
   }
 
-  // ✅ Wait for Supabase before showing anything
   if (loadingSession) {
     return (
       <div className="text-center mt-5">
-        <div className="spinner-border text-primary" role="status"></div>
+        <div className="spinner-border"></div>
         <p>Checking session...</p>
       </div>
     );
@@ -179,24 +158,37 @@ function AppContent() {
 
   return (
     <>
-      <Navbar/>
+      <Navbar />
       <div className="container mt-4">
         <Routes>
           <Route path="/" element={<Navigate to="/menu" replace />} />
           <Route path="/student-auth" element={<StudentAuth />} />
           <Route path="/admin" element={<AdminAuth />} />
 
-          {/* Student pages */}
+          {/* ✅ Student pages */}
           <Route
             path="/menu"
             element={<StudentMenu session={session} profile={profile} />}
           />
           <Route
-            path="/cart"
-            element={<Cart session={session} profile={profile} />}
+            path="/orders/history"
+            element={
+              <ProtectedRoute role="student">
+                <StudentOrderHistory />
+              </ProtectedRoute>
+            }
           />
 
-          {/* Admin/Staff pages */}
+          <Route
+            path="/cart"
+            element={
+              <ProtectedRoute role="student">
+                <Cart session={session} profile={profile} />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* ✅ Staff pages */}
           <Route
             path="/admin/dashboard"
             element={

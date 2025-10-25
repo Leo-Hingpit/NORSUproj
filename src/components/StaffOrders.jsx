@@ -1,39 +1,16 @@
-import React, { useEffect, useState } from 'react';
-import { supabase } from '../supabaseClient';
+import React, { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { supabase } from "../supabaseClient";
 
 export default function StaffOrders() {
-  const [orders, setOrders] = useState([]);
-  const [filteredOrders, setFilteredOrders] = useState([]);
-  const [filter, setFilter] = useState('All');
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    fetchOrders();
-
-    // 🔁 Listen for realtime changes
-    const channel = supabase
-      .channel('table_orders')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'table_orders' },
-        (payload) => {
-          console.log('🔁 Realtime update:', payload);
-          fetchOrders();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  // 📦 Fetch orders with profile relation
+  // 🔥 Fetch orders from Supabase
   async function fetchOrders() {
-    setLoading(true);
     const { data, error } = await supabase
-      .from('table_orders')
-      .select(`
+      .from("table_orders")
+      .select(
+        `
         id,
         created_at,
         user_id,
@@ -41,46 +18,89 @@ export default function StaffOrders() {
         total,
         status,
         profiles ( fullName )
-      `)
-      .order('created_at', { ascending: false });
+      `
+      )
+      .order("created_at", { ascending: false });
 
-    if (error) {
-      console.error('❌ Error fetching orders:', error.message);
-      setOrders([]);
-    } else {
-      console.log('📦 Orders fetched:', data);
-      setOrders(data || []);
-      applyFilter(filter, data);
-    }
-    setLoading(false);
+    if (error) throw new Error(error.message);
+    return data || [];
   }
 
-  // 🎯 Apply filter logic
-  function applyFilter(selectedFilter, sourceOrders = orders) {
-    setFilter(selectedFilter);
+  // 🧠 React Query for caching
+  const {
+    data: orders = [],
+    isLoading,
+    refetch,
+  } = useQuery({
+    queryKey: ["orders"],
+    queryFn: fetchOrders,
+    staleTime: 0,
+    cacheTime: 1000 * 60 * 5,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    refetchInterval: 5000,
+  });
 
-    if (selectedFilter === 'All') {
-      setFilteredOrders(sourceOrders);
-    } else {
-      setFilteredOrders(sourceOrders.filter((order) => order.status === selectedFilter));
-    }
-  }
+  // 🔁 Supabase realtime updates
+  useEffect(() => {
+    const channel = supabase
+      .channel("orders-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "table_orders" },
+        () => queryClient.invalidateQueries(["orders"])
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "table_orders" },
+        () => queryClient.invalidateQueries(["orders"])
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "table_orders" },
+        () => queryClient.invalidateQueries(["orders"])
+      )
+      .subscribe();
 
-  // 🔄 Update order status in database
+    return () => supabase.removeChannel(channel);
+  }, [queryClient]);
+
+  // 🧭 Filter state
+  const [filter, setFilter] = useState("All");
+
+  const filteredOrders =
+    filter === "All"
+      ? orders
+      : orders.filter((order) => order.status === filter);
+
+  // 💰 Payments state
+  const [payments, setPayments] = useState({});
+
+  const handlePaymentChange = (orderId, value) => {
+    setPayments((prev) => ({
+      ...prev,
+      [orderId]: value === "" ? "" : parseFloat(value),
+    }));
+  };
+
+  // 🔄 Update order status in Supabase + Optimistic Update
   async function updateStatus(orderId, newStatus) {
-    console.log(`⚙️ Updating order ${orderId} → ${newStatus}`);
+    try {
+      // Optimistically update cache
+      queryClient.setQueryData(["orders"], (old) =>
+        old.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
+      );
 
-    const { error } = await supabase
-      .from('table_orders')
-      .update({ status: newStatus })
-      .eq('id', orderId);
+      const { error } = await supabase
+        .from("table_orders")
+        .update({ status: newStatus })
+        .eq("id", orderId);
 
-    if (error) {
-      console.error('❌ Error updating status:', error.message);
-      alert('Failed to update order status.');
-    } else {
-      console.log(`✅ Order ${orderId} status updated to ${newStatus}`);
-      fetchOrders();
+      if (error) throw error;
+    } catch (err) {
+      console.error("❌ Update failed:", err.message);
+      alert("Failed to update order status.");
+      refetch(); // rollback
     }
   }
 
@@ -88,93 +108,124 @@ export default function StaffOrders() {
     <div className="container mt-4">
       <h3 className="mb-4">🍳 Kitchen Orders</h3>
 
-      {/* 🧭 Filter Controls */}
+      {/* Filter Buttons */}
       <div className="mb-3 d-flex align-items-center gap-2">
         <label className="form-label fw-bold me-2">Filter:</label>
-        {['All', 'Pending', 'In Progress', 'Complete'].map((status) => (
+        {["All", "Pending", "In Progress", "Complete"].map((status) => (
           <button
             key={status}
             className={`btn btn-sm ${
-              filter === status ? 'btn-primary' : 'btn-outline-primary'
+              filter === status ? "btn-primary" : "btn-outline-primary"
             }`}
-            onClick={() => applyFilter(status)}
+            onClick={() => setFilter(status)}
           >
             {status}
           </button>
         ))}
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <p>Loading orders...</p>
       ) : filteredOrders.length === 0 ? (
-        <p>No orders to display.</p>
+        <p>No orders found</p>
       ) : (
-        filteredOrders.map((order) => (
-          <div key={order.id} className="card mb-3 shadow-sm">
-            <div className="card-body">
-              <h5 className="card-title">
-                Order #{order.id}{' '}
-                <span
-                  className={`badge ${
-                    order.status === 'Pending'
-                      ? 'bg-secondary'
-                      : order.status === 'In Progress'
-                      ? 'bg-warning text-dark'
-                      : 'bg-success'
-                  }`}
-                >
-                  {order.status}
-                </span>
-              </h5>
+        filteredOrders.map((order) => {
+          const total =
+            order.items?.reduce((sum, item) => sum + item.price * item.qty, 0) ||
+            0;
+          const paymentAmount = payments[order.id] || 0;
+          const change = paymentAmount - total;
 
-              <p className="text-muted mb-1">
-                Placed on: {new Date(order.created_at).toLocaleString()}
-              </p>
-              <p className="mb-3">
-                <strong>Customer:</strong> {order.profiles?.fullName || 'Unknown User'}
-              </p>
+          return (
+            <div key={order.id} className="card mb-3 shadow-sm">
+              <div className="card-body">
+                <h5 className="card-title">
+                  Order #{order.id}{" "}
+                  <span
+                    className={`badge ${
+                      order.status === "Pending"
+                        ? "bg-secondary"
+                        : order.status === "In Progress"
+                        ? "bg-warning text-dark"
+                        : "bg-success"
+                    }`}
+                  >
+                    {order.status}
+                  </span>
+                </h5>
 
-              <ul className="list-group mb-3">
-                {Array.isArray(order.items) &&
-                  order.items.map((item, idx) => (
+                <p className="text-muted mb-1">
+                  Placed on: {new Date(order.created_at).toLocaleString()}
+                </p>
+                <p className="mb-3">
+                  <strong>Customer:</strong>{" "}
+                  {order.profiles?.fullName || "Unknown User"}
+                </p>
+
+                <ul className="list-group mb-3">
+                  {order.items?.map((item, idx) => (
                     <li
                       key={idx}
-                      className="list-group-item d-flex justify-content-between align-items-center"
+                      className="list-group-item d-flex justify-content-between"
                     >
-                      <span>{item.name}</span>
-                      <span>
-                        ₱{item.price} × {item.qty}
-                      </span>
+                      {item.name} <span>₱{item.price} × {item.qty}</span>
                     </li>
                   ))}
-              </ul>
+                </ul>
 
-              <h6>
-                <strong>Total:</strong> ₱{Number(order.total || 0).toFixed(2)}
-              </h6>
+                <h6>
+                  <strong>Total:</strong> ₱{total.toFixed(2)}
+                </h6>
 
-              {/* 🧩 Status Buttons */}
-              <div className="mt-3">
-                {order.status === 'Pending' && (
-                  <button
-                    className="btn btn-sm btn-warning me-2"
-                    onClick={() => updateStatus(order.id, 'In Progress')}
-                  >
-                    Mark In Progress
-                  </button>
-                )}
-                {order.status === 'In Progress' && (
-                  <button
-                    className="btn btn-sm btn-success"
-                    onClick={() => updateStatus(order.id, 'Complete')}
-                  >
-                    Mark Complete
-                  </button>
-                )}
+                {/* Payment Calculator */}
+                <div className="mt-3">
+                  <label className="form-label">Amount Paid:</label>
+                  <input
+                    type="number"
+                    className="form-control"
+                    placeholder="Enter amount paid"
+                    value={payments[order.id] || ""}
+                    onChange={(e) =>
+                      handlePaymentChange(order.id, e.target.value)
+                    }
+                  />
+                  {payments[order.id] !== undefined && (
+                    <p className="mt-2 fw-bold">
+                      Change:{" "}
+                      {change < 0 ? (
+                        <span className="text-danger">
+                          Insufficient Amount (₱{Math.abs(change).toFixed(2)} missing)
+                        </span>
+                      ) : (
+                        <span className="text-success">₱{change.toFixed(2)}</span>
+                      )}
+                    </p>
+                  )}
+                </div>
+
+                {/* Status Buttons */}
+                <div className="mt-3">
+                  {order.status === "Pending" && (
+                    <button
+                      className="btn btn-warning btn-sm me-2"
+                      onClick={() => updateStatus(order.id, "In Progress")}
+                    >
+                      Mark In Progress
+                    </button>
+                  )}
+                  {order.status === "In Progress" && (
+                    <button
+                      className="btn btn-success btn-sm"
+                      onClick={() => updateStatus(order.id, "Completed")}
+                    >
+                      Mark Completed
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );
