@@ -59,7 +59,7 @@ export default function Navbar() {
                 </li>
 
                 <li className="nav-item">
-                  <Link className="nav-link" to="/orders">Order History</Link>
+                  <Link className="nav-link" to="/orders/history">Order History</Link>
                 </li>
               </>
             )}
