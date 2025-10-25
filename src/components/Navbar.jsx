@@ -9,30 +9,47 @@ export default function Navbar() {
   const [session, setSession] = useState(null);
 
   useEffect(() => {
-    function loadFromStorage() {
-      try {
-        const savedProfile = localStorage.getItem('profile');
-        const savedSession = localStorage.getItem('sb-afwetlctquuvyuefmjme-auth-token');
-        setProfile(savedProfile ? JSON.parse(savedProfile) : null);
-        setSession(savedSession ? JSON.parse(savedSession) : null);
-      } catch (err) {
-        console.error('⚠️ Failed to parse localStorage data:', err);
-      }
+    // ✅ Load on first render
+    async function loadAuth() {
+      const { data } = await supabase.auth.getSession();
+      setSession(data?.session || null);
+
+      const savedProfile = localStorage.getItem("profile");
+      if (savedProfile) setProfile(JSON.parse(savedProfile));
     }
-    loadFromStorage();
-    window.addEventListener('storage', loadFromStorage);
-    const interval = setInterval(loadFromStorage, 1000);
+
+    loadAuth();
+
+    // ✅ Live auth listener!
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (_, session) => {
+        setSession(session);
+        if (!session) {
+          setProfile(null);
+          localStorage.removeItem("profile");
+          return;
+        }
+
+        const { data: userProfile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .single();
+
+        setProfile(userProfile);
+        localStorage.setItem("profile", JSON.stringify(userProfile));
+      }
+    );
+
     return () => {
-      window.removeEventListener('storage', loadFromStorage);
-      clearInterval(interval);
+      authListener?.subscription?.unsubscribe();
     };
   }, []);
 
   async function signOut() {
-    supabase.auth.signOut();
+    await supabase.auth.signOut();
     localStorage.clear();
-    sessionStorage.clear();
-    navigate('/admin', { replace: true });
+    navigate("/admin", { replace: true });
     setTimeout(() => window.location.reload(), 100);
   }
 
@@ -41,7 +58,12 @@ export default function Navbar() {
       <div className="container-fluid">
         <Link className="navbar-brand fw-bold" to="/">🍽️ Canteen</Link>
 
-        <button className="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navmenu">
+        <button
+          className="navbar-toggler"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#navmenu"
+        >
           <span className="navbar-toggler-icon"></span>
         </button>
 
@@ -49,23 +71,25 @@ export default function Navbar() {
           <ul className="navbar-nav me-auto mb-2 mb-lg-0">
 
             {/* ✅ Menu always visible */}
-            <li className="nav-item"><Link className="nav-link" to="/menu">Menu</Link></li>
+            <li className="nav-item">
+              <Link className="nav-link" to="/menu">Menu</Link>
+            </li>
 
-            {/* ✅ Student-only links */}
-            {profile?.role === 'student' && (
+            {/* ✅ Student-only */}
+            {profile?.role === "student" && (
               <>
                 <li className="nav-item">
                   <Link className="nav-link" to="/cart">Cart</Link>
                 </li>
-
                 <li className="nav-item">
-                  <Link className="nav-link" to="/orders">Order History</Link>
+                  {/* ✅ Fixed the incorrect route */}
+                  <Link className="nav-link" to="/orders/history">Order History</Link>
                 </li>
               </>
             )}
 
-            {/* ✅ Staff-only links */}
-            {profile?.role === 'staff' && (
+            {/* ✅ Staff-only */}
+            {profile?.role === "staff" && (
               <>
                 <li className="nav-item">
                   <Link className="nav-link" to="/admin/dashboard">Admin Dashboard</Link>
@@ -77,11 +101,12 @@ export default function Navbar() {
             )}
           </ul>
 
+          {/* ✅ Sign-in / profile */}
           <div className="d-flex align-items-center">
             {session?.user ? (
               <>
                 <span className="me-3 text-muted">
-                  {profile?.full_name || session.user.email}
+                  {profile?.fullName || session.user.email}
                 </span>
                 <button className="btn btn-outline-danger" onClick={signOut}>
                   Sign out

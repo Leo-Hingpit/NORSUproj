@@ -8,28 +8,27 @@ export default function StudentOrderHistory() {
 
   useEffect(() => {
     const loadOrders = async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const userId = sessionData?.session?.user?.id;
-      if (!userId) return;
+      console.log("📌 Fetching order history...");
 
-      console.log("Fetching orders for:", userId);
+      const userId = localStorage.getItem("user_id");
+      console.log("👤 Loaded userId:", userId);
+
+      if (!userId) {
+        console.warn("🚫 No stored userId. User may not be signed in.");
+        setLoading(false);
+        return;
+      }
 
       const { data, error } = await supabase
         .from("table_orders")
-        .select(`
-          id,
-          created_at,
-          items,
-          total,
-          status
-        `)
+        .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("❌ Load history failed:", error.message);
+        console.error("❌ Failed to load history:", error.message);
       } else {
-        console.log("✅ Order history loaded:", data);
+        console.log("✅ Orders:", data);
         setOrders(data || []);
       }
 
@@ -52,34 +51,28 @@ export default function StudentOrderHistory() {
       <h3 className="mb-3">📜 Order History</h3>
 
       {orders.length === 0 ? (
-        <p>You have no past orders.</p>
+        <p>No orders yet.</p>
       ) : (
         orders.map((order) => (
           <div key={order.id} className="card mb-3 shadow-sm">
             <div className="card-body">
               <h5 className="card-title">Order #{order.id}</h5>
-
               <p className="text-muted">
                 {new Date(order.created_at).toLocaleString()}
               </p>
 
               <ul className="list-group mb-3">
-                {Array.isArray(order.items) &&
-                  order.items.map((item, idx) => (
-                    <li
-                      key={idx}
-                      className="list-group-item d-flex justify-content-between"
-                    >
-                      <span>{item.name}</span>
-                      <span>
-                        ₱{item.price} × {item.qty}
-                      </span>
-                    </li>
-                  ))}
+                {(order.items || []).map((item, i) => (
+                  <li key={i} className="list-group-item d-flex justify-content-between">
+                    <span>{item.name}</span>
+                    <span>₱{item.price} × {item.qty}</span>
+                  </li>
+                ))}
               </ul>
 
               <strong>Total: ₱{Number(order.total).toFixed(2)}</strong>
               <br />
+
               <span
                 className={`badge mt-2 ${
                   order.status === "Pending"
