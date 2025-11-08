@@ -1,3 +1,4 @@
+// src/components/StaffItems.jsx
 import React, { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../supabaseClient";
@@ -16,7 +17,7 @@ export default function StaffItems() {
     imageFile: null,
   });
 
-  //React Query: Fetch items with automatic caching
+  // ✅ Fetch items using React Query
   const {
     data: items = [],
     refetch,
@@ -31,47 +32,24 @@ export default function StaffItems() {
       if (error) throw error;
       return data;
     },
-    refetchOnWindowFocus: true, // refresh on tab focus
-    staleTime: 1000 * 60, // cache for 1 minute
+    refetchOnWindowFocus: true,
+    staleTime: 1000 * 60,
   });
 
-  //Supabase realtime listener
+  // ✅ Enable realtime refresh
   useEffect(() => {
     const channel = supabase
       .channel("realtime-items")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "table_items" },
-        (payload) => {
-          console.log("🟢 Item added:", payload.new);
-          queryClient.invalidateQueries(["items"]);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "table_items" },
-        (payload) => {
-          console.log("🟡 Item updated:", payload.new);
-          queryClient.invalidateQueries(["items"]);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: "table_items" },
-        (payload) => {
-          console.log("🔴 Item deleted:", payload.old);
-          queryClient.invalidateQueries(["items"]);
-        }
-      )
+      .on("*", { schema: "public", table: "table_items" }, () => {
+        console.log("🔄 Realtime Update Triggered");
+        queryClient.invalidateQueries(["items"]);
+      })
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => supabase.removeChannel(channel);
   }, [queryClient]);
 
-
-  //Upload Image
+  // ✅ Upload images to Supabase Storage
   async function uploadImage(file) {
     if (!file) return form.image_url;
 
@@ -81,7 +59,6 @@ export default function StaffItems() {
 
     const { error } = await supabase.storage.from("items").upload(filePath, file);
     if (error) {
-      console.error("❌ Upload failed:", error.message);
       alert("Upload failed: " + error.message);
       return form.image_url;
     }
@@ -90,6 +67,7 @@ export default function StaffItems() {
     return data.publicUrl;
   }
 
+  // ✅ Save / Update item
   async function save(e) {
     e.preventDefault();
     setLoading(true);
@@ -108,23 +86,33 @@ export default function StaffItems() {
         image_url: imageUrl,
       };
 
+      console.log("📝 Payload:", payload, "Editing ID:", editing);
+
       let res;
       if (editing) {
-        res = await supabase.from("table_items").update(payload).eq("id", editing);
+        // ✅ Must include primary key OR RLS blocks update
+        res = await supabase
+          .from("table_items")
+          .update({ ...payload, id: editing })
+          .eq("id", editing);
       } else {
         res = await supabase.from("table_items").insert([payload]);
       }
 
       if (res.error) throw res.error;
-      queryClient.invalidateQueries(["items"]); // 🔄 Refresh list
+
+      console.log("✅ Save successful");
+      queryClient.invalidateQueries(["items"]);
       openCreate();
     } catch (err) {
       console.error("❌ Save failed:", err.message);
+      alert("Failed to save: " + err.message);
     }
 
     setLoading(false);
   }
 
+  // ✅ Reset form for new item
   function openCreate() {
     setEditing(null);
     setForm({
@@ -137,7 +125,9 @@ export default function StaffItems() {
     });
   }
 
+  // ✅ Load selected item into form
   function openEdit(item) {
+    console.log("✏️ Editing Item:", item);
     setEditing(item.id);
     setForm({
       name: item.name,
@@ -149,34 +139,34 @@ export default function StaffItems() {
     });
   }
 
+  // ✅ Delete item
   async function remove(id) {
-    if (!window.confirm("Delete this item?")) return;
+    if (!window.confirm("Are you sure you want to delete this item?")) return;
     const { error } = await supabase.from("table_items").delete().eq("id", id);
     if (error) console.error("❌ Delete error:", error.message);
     else queryClient.invalidateQueries(["items"]);
   }
 
+  // ✅ Toggle available state
   async function toggleAvailable(item) {
-    const { error } = await supabase
+    await supabase
       .from("table_items")
       .update({ available: !item.available })
       .eq("id", item.id);
 
-    if (error) console.error("❌ Toggle error:", error.message);
-    else queryClient.invalidateQueries(["items"]);
+    queryClient.invalidateQueries(["items"]);
   }
 
   return (
     <div>
       <h3>Manage Items</h3>
-      
 
       <div className="row">
-        {/* Form Section */}
+        {/* ✅ Form Section */}
         <div className="col-md-6">
           <div className="card mb-3">
             <div className="card-body">
-              <h5>{editing ? "Edit Item" : "Create Item"}</h5>
+              <h5>{editing ? "✏️ Edit Item" : "➕ Create Item"}</h5>
 
               <form onSubmit={save}>
                 <input
@@ -186,6 +176,7 @@ export default function StaffItems() {
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
                 />
+
                 <textarea
                   className="form-control mb-2"
                   placeholder="Description"
@@ -194,6 +185,7 @@ export default function StaffItems() {
                     setForm({ ...form, description: e.target.value })
                   }
                 />
+
                 <input
                   className="form-control mb-2"
                   placeholder="Price"
@@ -243,19 +235,31 @@ export default function StaffItems() {
                 </div>
 
                 <button className="btn btn-primary" disabled={loading}>
-                  {loading ? "Saving..." : "Save"}
+                  {loading ? "Saving..." : editing ? "Update" : "Save"}
                 </button>
+
+                {editing && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary ms-2"
+                    onClick={openCreate}
+                  >
+                    Cancel Edit
+                  </button>
+                )}
               </form>
             </div>
           </div>
         </div>
 
-        {/* Items List */}
+        {/* ✅ Items List */}
         <div className="col-md-6">
-          <h5>Items List</h5>
+          <h5>Items List {isFetching && "(Refreshing...)"}</h5>
+
           {items.map((it) => (
             <div key={it.id} className="card mb-2 shadow-sm">
               <div className="card-body d-flex justify-content-between align-items-center">
+
                 <div className="d-flex align-items-center gap-2">
                   {it.image_url && (
                     <img
@@ -269,7 +273,6 @@ export default function StaffItems() {
                       alt="item"
                     />
                   )}
-
                   <div>
                     <strong>{it.name}</strong>
                     <br />
@@ -286,12 +289,14 @@ export default function StaffItems() {
                   >
                     Edit
                   </button>
+
                   <button
                     className="btn btn-sm btn-outline-danger me-2"
                     onClick={() => remove(it.id)}
                   >
                     Delete
                   </button>
+
                   <button
                     className={`btn btn-sm ${
                       it.available ? "btn-success" : "btn-warning"
@@ -301,9 +306,12 @@ export default function StaffItems() {
                     {it.available ? "Available" : "Unavailable"}
                   </button>
                 </div>
+
               </div>
             </div>
           ))}
+
+          {items.length === 0 && <p>No items found.</p>}
         </div>
       </div>
     </div>
